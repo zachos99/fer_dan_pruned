@@ -51,6 +51,37 @@ class customTransform:
 ##################################################################################################################
 ##################################################################################################################
 
+
+class customTargetTransform:
+    """
+    The targets in the DataLoader are taken in alphabetical order like the order of the folders
+    but the labels the dataset is trained have a specific order
+    So we transform them in the correct order
+
+    """
+
+    def __init__(self):
+
+        # Order the AffectNet dataset is trained
+        self.classes_in_order = ['neutral', 'happy', 'sad', 'surprise', 'fear', 'disgust', 'anger', 'contempt']
+
+        # Order the RAF dataset is trained
+        #self.classes_in_order = ['surprise', 'fear', 'disgust', 'happy', 'sad', 'anger', 'neutral']
+
+        self.classes_alphabetical = ['anger', 'contempt', 'disgust', 'fear', 'happy', 'neutral', 'sad', 'surprise' ]
+
+    def __call__(self, target):
+
+        label = self.classes_alphabetical[target]
+        class_index = self.classes_in_order.index(label)
+
+        return class_index
+
+
+##################################################################################################################
+##################################################################################################################
+##################################################################################################################
+
 class Model:
     def __init__(self):
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -60,12 +91,14 @@ class Model:
             transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                  std=[0.229, 0.224, 0.225])
         ])
-        self.labels = ['neutral', 'happy', 'sad', 'surprise', 'fear', 'disgust', 'anger']#, 'contempt']
 
-        self.model = DAN(num_head=4, num_class=7, pretrained=False)
+        self.labels = ['neutral', 'happy', 'sad', 'surprise', 'fear', 'disgust', 'anger', 'contempt']
+        #self.labels = ['surprise', 'fear', 'disgust', 'happy', 'sad', 'anger', 'neutral']
+
+        self.model = DAN(num_head=4, num_class=8, pretrained=False)
 
         # FOR PRETRAINED MODELS #
-        checkpoint = torch.load('./checkpoints/rafdb_epoch21_acc0.897_bacc0.8275.pth',
+        checkpoint = torch.load('./checkpoints/affecnet8_epoch5_acc0.6209.pth',
                                 map_location=self.device)
         self.model.load_state_dict(checkpoint['model_state_dict'], strict=True)
         #                       #
@@ -81,15 +114,22 @@ class Model:
 
     def fer(self, val_loader):
         with torch.no_grad():
+            bingo_cnt = 0
+            sample_cnt = 0
             for imgs, targets in val_loader:
                 imgs = imgs.to(model.device)
                 targets = targets.to(model.device)
                 out, feat, heads = self.model(imgs)
-                _, pred = torch.max(out, 1) # pred contains the indices of the max value for every (batch_size) tensor
+                _, pred = torch.max(out, 1)             # Variable pred contains the indices of the max value for every (batch_size) tensor
+
+                correct_num = torch.eq(pred, targets)   # Compares the two lists per element
+                bingo_cnt += correct_num.sum().cpu()    # Counts the true matches
+                sample_cnt += out.size(0)               # Counts total data
+
                 label = [self.labels[i] for i in pred] # contains the labels for every tensor
                 print(label)
                 all_labels.append(label)
-            return all_labels
+            return all_labels, bingo_cnt/sample_cnt
 
 
 ##################################################################################################################
@@ -100,15 +140,18 @@ model = Model()
 batch_size = 128
 img_dir= "/home/zachos/Desktop/AffectNet HQ/AffectNetFixed"
 
-data_transforms_val = transforms.Compose([
+data_transforms = transforms.Compose([
     customTransform(),
     transforms.Resize((224, 224)),
     transforms.ToTensor(),
     transforms.Normalize(mean=[0.485, 0.456, 0.406],
                          std=[0.229, 0.224, 0.225])])
 
+target_transforms = transforms.Compose([
+    customTargetTransform()])
 
-val_dataset = datasets.ImageFolder(img_dir, transform=data_transforms_val)
+val_dataset = datasets.ImageFolder(img_dir, transform=data_transforms, target_transform=target_transforms)
+
 
 #if model.num_class == 7:  # ignore the 8-th class
 #    idx = [i for i in range(len(val_dataset)) if val_dataset.imgs[i][1] != 7]
@@ -121,9 +164,11 @@ val_loader = torch.utils.data.DataLoader(val_dataset,
                                          shuffle=False,
                                          pin_memory=True)
 all_labels= []
-out = model.fer(val_loader)
+out, acc = model.fer(val_loader)
 
 
 labels_array = np.array(out)
 print(labels_array)
+
+print('Accuracy: ', acc) # acc= 0,7652 // 0.7649
 
